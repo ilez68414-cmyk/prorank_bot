@@ -1,14 +1,21 @@
 const { Telegraf } = require('telegraf');
 const admin = require('firebase-admin');
 
-// Сервисный ключ (должен лежать в папке с ботом)
-const serviceAccount = require('./serviceAccountKey.json');
-admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+// Инициализация Firebase Admin SDK (работает и локально, и на Railway)
+if (!process.env.GOOGLE_CREDENTIALS) {
+    console.error("❌ Переменная GOOGLE_CREDENTIALS не задана!");
+    process.exit(1);
+}
+const serviceAccount = JSON.parse(process.env.GOOGLE_CREDENTIALS);
+
+if (!admin.apps.length) {
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+}
 const db = admin.firestore();
 
-// ТВОИ ДАННЫЕ
-const BOT_TOKEN = '8527160088:AAGc2311QFkp6F7-Jx5k8MJfqlpvbueSl5E';
-const MODERATOR_CHANNEL_ID = '-1003814894637';
+// ТВОИ ДАННЫЕ (берутся из переменных окружения на Railway)
+const BOT_TOKEN = process.env.BOT_TOKEN || '8527160088:AAGc2311QFkp6F7-Jx5k8MJfqlpvbueSl5E';
+const MODERATOR_CHANNEL_ID = process.env.MODERATOR_CHANNEL_ID || '-1003814894637';
 const bot = new Telegraf(BOT_TOKEN);
 
 // Хранилище временных заявок
@@ -101,7 +108,6 @@ bot.on('text', async (ctx) => {
 📅 Дата: ${req.date}
 📝 Описание: ${req.description}`;
         
-        // Кнопки для модератора (отправляются вместе с заявкой)
         const inlineKeyboard = {
             reply_markup: {
                 inline_keyboard: [
@@ -131,7 +137,6 @@ bot.action(/approve_(.+)/, async (ctx) => {
             verifiedWins: admin.firestore.FieldValue.increment(1)
         });
         
-        // Уведомим бойца
         const fighterDoc = await db.collection('fighters').doc(fighterId).get();
         const fighter = fighterDoc.data();
         const userTelegramId = fighter.telegramId;
@@ -149,12 +154,10 @@ bot.action(/approve_(.+)/, async (ctx) => {
 bot.action(/reject_(.+)/, async (ctx) => {
     const fighterId = ctx.match[1];
     
-    // Найдём telegramId бойца в Firestore
     const fighterDoc = await db.collection('fighters').doc(fighterId).get();
     const fighter = fighterDoc.data();
     const userTelegramId = fighter.telegramId;
     
-    // Отправим уведомление бойцу (если Telegram ID есть)
     if (userTelegramId) {
         await bot.telegram.sendMessage(userTelegramId, '❌ Ваша заявка на верификацию отклонена модератором.');
     }
