@@ -1,24 +1,22 @@
 const { Telegraf } = require('telegraf');
 const admin = require('firebase-admin');
 
-// Инициализация Firebase Admin SDK (работает и локально, и на Railway)
+// Инициализация Firebase Admin SDK (только через переменную окружения)
 if (!process.env.GOOGLE_CREDENTIALS) {
     console.error("❌ Переменная GOOGLE_CREDENTIALS не задана!");
     process.exit(1);
 }
 const serviceAccount = JSON.parse(process.env.GOOGLE_CREDENTIALS);
-
 if (!admin.apps.length) {
     admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 }
 const db = admin.firestore();
 
-// ТВОИ ДАННЫЕ (берутся из переменных окружения на Railway)
+// Твои данные (берутся из переменных окружения на Railway)
 const BOT_TOKEN = process.env.BOT_TOKEN || '8527160088:AAGc2311QFkp6F7-Jx5k8MJfqlpvbueSl5E';
 const MODERATOR_CHANNEL_ID = process.env.MODERATOR_CHANNEL_ID || '-1003814894637';
 const bot = new Telegraf(BOT_TOKEN);
 
-// Хранилище временных заявок
 const pendingRequests = {};
 
 // ---------- КОМАНДЫ ----------
@@ -32,7 +30,7 @@ bot.start(async (ctx) => {
     else if (startParam && startParam.startsWith('link_')) {
         const fighterId = startParam.replace('link_', '');
         await db.collection('fighters').doc(fighterId).update({ telegramId: ctx.from.id });
-        ctx.reply('✅ Telegram привязан к твоему аккаунту! Теперь можешь подтверждать рекорды и получать уведомления.');
+        ctx.reply('✅ Telegram привязан! Теперь можешь отправлять заявки на верификацию.');
     }
     else {
         ctx.reply('🥊 Добро пожаловать в PRORANK!\n\n/verify — подтвердить рекорд\n/profile — мой профиль\n/challenges — мои вызовы\n/support — поддержка');
@@ -157,7 +155,6 @@ bot.action(/reject_(.+)/, async (ctx) => {
     const fighterDoc = await db.collection('fighters').doc(fighterId).get();
     const fighter = fighterDoc.data();
     const userTelegramId = fighter.telegramId;
-    
     if (userTelegramId) {
         await bot.telegram.sendMessage(userTelegramId, '❌ Ваша заявка на верификацию отклонена модератором.');
     }
