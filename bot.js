@@ -30,6 +30,17 @@ process.on('unhandledRejection', (err) => {
 // Хранилище временных данных для верификации
 const pendingVerifications = new Map();
 
+// ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+
+function getTypeText(type) {
+    const types = {
+        'win': '🥊 Победа в бою',
+        'finish': '💥 Финиш (нокаут/сабмишен)',
+        'tournament': '🏆 Победа на турнире'
+    };
+    return types[type] || type;
+}
+
 // ========== КОМАНДЫ ==========
 
 // /start - главное меню
@@ -62,7 +73,6 @@ bot.onText(/📊 Мой профиль/, async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
     
-    // Здесь можно запросить данные из Firestore
     await bot.sendMessage(chatId, 
         `📊 *Твой профиль*\n\n` +
         `🆔 ID: \`${userId}\`\n` +
@@ -128,7 +138,7 @@ bot.on('text', async (msg) => {
     const userId = msg.from.id;
     const text = msg.text;
     
-    // Игнорируем команды с кнопок
+    // Игнорируем команды с кнопок-меню
     if (text === '📊 Мой профиль' || text === '🏆 Подтвердить рекорд' || 
         text === '⚔️ Мои вызовы' || text === '❓ Поддержка') {
         return;
@@ -136,7 +146,11 @@ bot.on('text', async (msg) => {
     
     const pending = pendingVerifications.get(userId);
     
-    if (pending && pending.step === 'waiting_for_description') {
+    if (!pending) {
+        return;
+    }
+    
+    if (pending.step === 'waiting_for_description') {
         pending.description = text;
         pending.step = 'waiting_for_media';
         pendingVerifications.set(userId, pending);
@@ -146,11 +160,14 @@ bot.on('text', async (msg) => {
             `📸 Теперь отправь *фото или видео* доказательство.`,
             { parse_mode: 'Markdown' }
         );
+    } else {
+        await bot.sendMessage(chatId, 
+            `❌ Сначала начни процесс: /start → "🏆 Подтвердить рекорд"`);
     }
 });
 
-// Обработка фото/видео
-bot.on(['photo', 'video'], async (msg) => {
+// Обработка фото
+bot.on('photo', async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
     const username = msg.from.username || `${msg.from.first_name} ${msg.from.last_name || ''}`;
@@ -159,59 +176,33 @@ bot.on(['photo', 'video'], async (msg) => {
     
     if (!pending || pending.step !== 'waiting_for_media') {
         await bot.sendMessage(chatId, 
-            `❌ Сначала начни процесс подтверждения: /start → "Подтвердить рекорд"`);
+            `❌ Сначала начни процесс подтверждения рекорда: /start → "🏆 Подтвердить рекорд"`);
         return;
     }
     
-    // Получаем медиа
-    let mediaUrl = '';
-    let mediaType = '';
-    
-    if (msg.photo) {
+    try {
         const photo = msg.photo[msg.photo.length - 1];
         const fileId = photo.file_id;
         const fileLink = await bot.getFileLink(fileId);
-        mediaUrl = fileLink;
-        mediaType = 'Фото';
-    } else if (msg.video) {
-        const video = msg.video;
-        const fileId = video.file_id;
-        const fileLink = await bot.getFileLink(fileId);
-        mediaUrl = fileLink;
-        mediaType = 'Видео';
-    }
-    
-    // Создаём ID заявки
-    const requestId = Date.now();
-    
-    // Формируем сообщение для модераторов
-    const moderatorMessage = 
-        `🔔 *НОВАЯ ЗАЯВКА НА ПОДТВЕРЖДЕНИЕ* #${requestId}\n\n` +
-        `👤 *Боец:* ${username}\n` +
-        `🆔 *Telegram ID:* \`${userId}\`\n` +
-        `📅 *Дата:* ${new Date().toLocaleString()}\n\n` +
-        `🏆 *Тип:* ${getTypeText(pending.type)}\n\n` +
-        `📝 *Описание:*\n${pending.description}\n\n` +
-        `📎 *${mediaType}:* [Смотреть](${mediaUrl})\n\n` +
-        `---\n` +
-        `✅ *Подтвердить:* /approve_${requestId}\n` +
-        `❌ *Отклонить:* /reject_${requestId}\n` +
-        `📝 *Уточнить:* /clarify_${requestId}`;
-    
-    // Отправляем модераторам
-    try {
+        
+        const requestId = Date.now();
+        
+        const moderatorMessage = 
+            `🔔 *НОВАЯ ЗАЯВКА НА ПОДТВЕРЖДЕНИЕ* #${requestId}\n\n` +
+            `👤 *Боец:* ${username}\n` +
+            `🆔 *Telegram ID:* \`${userId}\`\n` +
+            `📅 *Дата:* ${new Date().toLocaleString()}\n\n` +
+            `🏆 *Тип:* ${getTypeText(pending.type)}\n\n` +
+            `📝 *Описание:*\n${pending.description}\n\n` +
+            `📎 *Фото:* [Смотреть](${fileLink})\n\n` +
+            `---\n` +
+            `✅ *Подтвердить:* /approve_${requestId}\n` +
+            `❌ *Отклонить:* /reject_${requestId}\n` +
+            `📝 *Уточнить:* /clarify_${requestId}`;
+        
         await bot.sendMessage(MODERATOR_CHANNEL_ID, moderatorMessage, { parse_mode: 'Markdown' });
         
-        // Сохраняем заявку
-        pendingVerifications.set(userId, { 
-            step: 'completed', 
-            requestId,
-            type: pending.type,
-            description: pending.description,
-            mediaUrl,
-            mediaType,
-            username
-        });
+        pendingVerifications.delete(userId);
         
         await bot.sendMessage(chatId, 
             `✅ *Заявка отправлена!* #${requestId}\n\n` +
@@ -221,9 +212,59 @@ bot.on(['photo', 'video'], async (msg) => {
         );
         
     } catch (err) {
-        console.error('Ошибка отправки модераторам:', err);
+        console.error('Ошибка при обработке фото:', err);
         await bot.sendMessage(chatId, 
-            `❌ Ошибка при отправке заявки. Попробуй позже.`);
+            `❌ Ошибка при отправке заявки. Попробуй ещё раз.`);
+    }
+});
+
+// Обработка видео
+bot.on('video', async (msg) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const username = msg.from.username || `${msg.from.first_name} ${msg.from.last_name || ''}`;
+    
+    const pending = pendingVerifications.get(userId);
+    
+    if (!pending || pending.step !== 'waiting_for_media') {
+        await bot.sendMessage(chatId, 
+            `❌ Сначала начни процесс подтверждения рекорда: /start → "🏆 Подтвердить рекорд"`);
+        return;
+    }
+    
+    try {
+        const video = msg.video;
+        const fileId = video.file_id;
+        const fileLink = await bot.getFileLink(fileId);
+        
+        const requestId = Date.now();
+        
+        const moderatorMessage = 
+            `🔔 *НОВАЯ ЗАЯВКА НА ПОДТВЕРЖДЕНИЕ* #${requestId}\n\n` +
+            `👤 *Боец:* ${username}\n` +
+            `🆔 *Telegram ID:* \`${userId}\`\n` +
+            `📅 *Дата:* ${new Date().toLocaleString()}\n\n` +
+            `🏆 *Тип:* ${getTypeText(pending.type)}\n\n` +
+            `📝 *Описание:*\n${pending.description}\n\n` +
+            `📎 *Видео:* [Смотреть](${fileLink})\n\n` +
+            `---\n` +
+            `✅ *Подтвердить:* /approve_${requestId}\n` +
+            `❌ *Отклонить:* /reject_${requestId}\n` +
+            `📝 *Уточнить:* /clarify_${requestId}`;
+        
+        await bot.sendMessage(MODERATOR_CHANNEL_ID, moderatorMessage, { parse_mode: 'Markdown' });
+        
+        pendingVerifications.delete(userId);
+        
+        await bot.sendMessage(chatId, 
+            `✅ *Заявка отправлена!* #${requestId}\n\n` +
+            `Модераторы рассмотрят её в ближайшее время.`,
+            { parse_mode: 'Markdown' }
+        );
+        
+    } catch (err) {
+        console.error('Ошибка при обработке видео:', err);
+        await bot.sendMessage(chatId, `❌ Ошибка. Попробуй ещё раз.`);
     }
 });
 
@@ -258,7 +299,6 @@ bot.onText(/❓ Поддержка/, async (msg) => {
 bot.onText(/\/approve_(\d+)/, async (msg, match) => {
     const requestId = match[1];
     const chatId = msg.chat.id;
-    const moderatorId = msg.from.id;
     
     if (chatId.toString() !== MODERATOR_CHANNEL_ID) return;
     
@@ -268,9 +308,6 @@ bot.onText(/\/approve_(\d+)/, async (msg, match) => {
         `Время: ${new Date().toLocaleString()}`,
         { parse_mode: 'Markdown' }
     );
-    
-    // Здесь добавить логику начисления очков в Firestore
-    // await addPointsToUser(userId, points);
 });
 
 bot.onText(/\/reject_(\d+)/, async (msg, match) => {
@@ -280,7 +317,8 @@ bot.onText(/\/reject_(\d+)/, async (msg, match) => {
     if (chatId.toString() !== MODERATOR_CHANNEL_ID) return;
     
     await bot.sendMessage(chatId, 
-        `❌ *Заявка #${requestId} ОТКЛОНЕНА*`,
+        `❌ *Заявка #${requestId} ОТКЛОНЕНА*\n\n` +
+        `Модератор: @${msg.from.username || msg.from.first_name}`,
         { parse_mode: 'Markdown' }
     );
 });
@@ -293,20 +331,10 @@ bot.onText(/\/clarify_(\d+)/, async (msg, match) => {
     
     await bot.sendMessage(chatId, 
         `📝 *Заявка #${requestId} ТРЕБУЕТ УТОЧНЕНИЯ*\n\n` +
-        `Модератор запросил дополнительную информацию.`,
+        `Модератор: @${msg.from.username || msg.from.first_name}`,
         { parse_mode: 'Markdown' }
     );
 });
-
-// Вспомогательная функция
-function getTypeText(type) {
-    const types = {
-        'win': '🥊 Победа в бою',
-        'finish': '💥 Финиш (нокаут/сабмишен)',
-        'tournament': '🏆 Победа на турнире'
-    };
-    return types[type] || type;
-}
 
 // Пинг каждые 30 секунд, чтобы бот не засыпал
 setInterval(() => {
