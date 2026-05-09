@@ -1,7 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const { initializeApp } = require('firebase/app');
-const { getFirestore, doc, getDoc, updateDoc } = require('firebase/firestore');
+const { getFirestore, doc, getDoc, updateDoc, collection, query, where, getDocs } = require('firebase/firestore');
 
 const TOKEN = '8527160088:AAGc2311QFkp6F7-Jx5k8MJfqlpvbueSl5E';
 const MODERATOR_CHANNEL_ID = '-1003814894637';
@@ -18,8 +18,14 @@ const firebaseConfig = {
     appId: "1:716836144015:web:f1575147750608d0f881fa"
 };
 
-const firebaseApp = initializeApp(firebaseConfig);
-const db = getFirestore(firebaseApp);
+let db;
+try {
+    const firebaseApp = initializeApp(firebaseConfig);
+    db = getFirestore(firebaseApp);
+    console.log('✅ Firebase подключен');
+} catch (err) {
+    console.error('❌ Ошибка подключения Firebase:', err);
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -27,8 +33,8 @@ const PORT = process.env.PORT || 3000;
 app.get('/', (req, res) => res.send('PRORANK Bot is running!'));
 app.listen(PORT, () => console.log(`✅ Express сервер запущен на порту ${PORT}`));
 
-process.on('uncaughtException', (err) => console.error('❌', err));
-process.on('unhandledRejection', (err) => console.error('❌', err));
+process.on('uncaughtException', (err) => console.error('❌ Uncaught:', err));
+process.on('unhandledRejection', (err) => console.error('❌ Rejection:', err));
 
 const pendingVerifications = new Map();
 
@@ -42,12 +48,16 @@ function getTypeText(type) {
 }
 
 // ========== ПРИВЯЗКА АККАУНТА ==========
-// Команда /verify UID
 bot.onText(/\/verify (.+)/, async (msg, match) => {
     const chatId = msg.chat.id;
     const telegramId = msg.from.id;
     const username = msg.from.username || msg.from.first_name;
     const uid = match[1];
+    
+    if (!db) {
+        await bot.sendMessage(chatId, `❌ Ошибка подключения к базе данных. Попробуйте позже.`);
+        return;
+    }
     
     try {
         const fighterRef = doc(db, "fighters", uid);
@@ -79,7 +89,6 @@ bot.onText(/\/verify (.+)/, async (msg, match) => {
     }
 });
 
-// Команда /verify без аргументов (подсказка)
 bot.onText(/\/verify$/, (msg) => {
     const chatId = msg.chat.id;
     bot.sendMessage(chatId, 
@@ -105,7 +114,7 @@ bot.onText(/\/start/, async (msg) => {
                 [{ text: '📊 Мой профиль' }],
                 [{ text: '🏆 Подтвердить рекорд' }],
                 [{ text: '⚔️ Мои вызовы' }],
-                [{ text: '🛒 Магазин вызовов' }],
+                [{ text: '🛒 Магазин' }],
                 [{ text: '❓ Поддержка' }]
             ],
             resize_keyboard: true
@@ -125,27 +134,36 @@ bot.onText(/📊 Мой профиль/, async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
     
-    // Проверяем, привязан ли аккаунт
-    const fightersRef = collection(db, "fighters");
-    const q = query(fightersRef, where("telegramId", "==", String(userId)));
-    const snapshot = await getDocs(q);
+    if (!db) {
+        await bot.sendMessage(chatId, `❌ Ошибка базы данных`);
+        return;
+    }
     
-    if (snapshot.empty) {
-        await bot.sendMessage(chatId, 
-            `📊 *Твой профиль*\n🆔 ID: \`${userId}\`\n\n` +
-            `⚠️ Аккаунт не привязан. Используй /verify для привязки.`,
-            { parse_mode: 'Markdown' }
-        );
-    } else {
-        const fighter = snapshot.docs[0].data();
-        await bot.sendMessage(chatId, 
-            `📊 *Твой профиль*\n\n` +
-            `👤 Имя: ${fighter.name || '—'}\n` +
-            `🏆 Побед: ${fighter.wins || 0}\n` +
-            `⭐ FRS: ${fighter.frs || 0}\n` +
-            `🎯 Вызовов: ${(fighter.freeChallenges || 0) + (fighter.purchasedChallenges || 0)}`,
-            { parse_mode: 'Markdown' }
-        );
+    try {
+        const fightersRef = collection(db, "fighters");
+        const q = query(fightersRef, where("telegramId", "==", String(userId)));
+        const snapshot = await getDocs(q);
+        
+        if (snapshot.empty) {
+            await bot.sendMessage(chatId, 
+                `📊 *Твой профиль*\n🆔 ID: \`${userId}\`\n\n` +
+                `⚠️ Аккаунт не привязан. Используй /verify для привязки.`,
+                { parse_mode: 'Markdown' }
+            );
+        } else {
+            const fighter = snapshot.docs[0].data();
+            await bot.sendMessage(chatId, 
+                `📊 *Твой профиль*\n\n` +
+                `👤 Имя: ${fighter.name || '—'}\n` +
+                `🏆 Побед: ${fighter.wins || 0}\n` +
+                `⭐ FRS: ${fighter.frs || 0}\n` +
+                `🎯 Вызовов: ${(fighter.freeChallenges || 0) + (fighter.purchasedChallenges || 0)}`,
+                { parse_mode: 'Markdown' }
+            );
+        }
+    } catch (err) {
+        console.error(err);
+        await bot.sendMessage(chatId, `❌ Ошибка загрузки профиля`);
     }
 });
 
@@ -169,20 +187,17 @@ bot.onText(/🏆 Подтвердить рекорд/, async (msg) => {
     await bot.sendMessage(chatId, `🏆 *Выбери тип достижения:*`, { parse_mode: 'Markdown', ...keyboard });
 });
 
-// 🛒 Магазин вызовов
-bot.onText(/🛒 Магазин вызовов/, (msg) => {
+// 🛒 Магазин
+bot.onText(/🛒 Магазин/, (msg) => {
     const chatId = msg.chat.id;
     bot.sendMessage(chatId, 
-        `🛒 *Купить вызовы*\n\n` +
-        `⭐ 5 звёзд → 5 вызовов (50₽)\n` +
-        `⭐ 15 звёзд → 20 вызовов (150₽)\n\n` +
-        `💎 Премиум → 30 звёзд (300₽)\n\n` +
-        `👉 Купить на сайте: ${process.env.SITE_URL || 'https://ilez68414-cmyk.github.io/prorank-live/'}shop.html`,
+        `🛒 *Магазин PRORANK*\n\n` +
+        `👉 Купить вызовы и премиум: [Открыть магазин](${process.env.SITE_URL || 'https://ilez68414-cmyk.github.io/prorank-live/'}shop.html)`,
         { parse_mode: 'Markdown' }
     );
 });
 
-// Выбор типа рекорда
+// Обработка callback_query
 bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
     const userId = query.from.id;
@@ -217,7 +232,7 @@ bot.on('text', async (msg) => {
     const userId = msg.from.id;
     const text = msg.text;
     
-    if (['📊 Мой профиль', '🏆 Подтвердить рекорд', '⚔️ Мои вызовы', '🛒 Магазин вызовов', '❓ Поддержка'].includes(text)) return;
+    if (['📊 Мой профиль', '🏆 Подтвердить рекорд', '⚔️ Мои вызовы', '🛒 Магазин', '❓ Поддержка'].includes(text)) return;
     
     const pending = pendingVerifications.get(userId);
     if (!pending) return;
@@ -283,8 +298,8 @@ bot.onText(/⚔️ Мои вызовы/, async (msg) => {
 
 // ❓ Поддержка
 bot.onText(/❓ Поддержка/, async (msg) => {
-    await bot.sendMessage(msg.chat.id, `❓ *Поддержка*\n\nЧат: @prorank_support\n\nПо вопросам привязки аккаунта: /verify`, { parse_mode: 'Markdown' });
+    await bot.sendMessage(msg.chat.id, `❓ *Поддержка*\n\nЧат: @prorank_support\n\nПо вопросам привязки: /verify`, { parse_mode: 'Markdown' });
 });
 
 setInterval(() => console.log('💓 Бот жив'), 30000);
-console.log('🤖 Бот PRORANK запущен с поддержкой привязки аккаунта!');
+console.log('🤖 Бот PRORANK запущен!');
