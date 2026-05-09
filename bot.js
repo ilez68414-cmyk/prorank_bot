@@ -28,65 +28,35 @@ function getTypeText(type) {
     return types[type] || type;
 }
 
-// ========== ПРИВЯЗКА АККАУНТА (через админку, без Firebase в боте) ==========
+// ========== ПРИВЯЗКА АККАУНТА ==========
 bot.onText(/\/start verify_(.+)/, async (msg, match) => {
     const chatId = msg.chat.id;
     const uid = match[1];
     const telegramId = msg.from.id;
     const username = msg.from.username || msg.from.first_name;
     
-    // Отправляем данные админу в канал
+    const keyboard = {
+        reply_markup: {
+            inline_keyboard: [
+                [
+                    { text: '✅ Подтвердить привязку', callback_data: `approve_tg_${uid}_${telegramId}` },
+                    { text: '❌ Отклонить', callback_data: `reject_tg_${uid}` }
+                ]
+            ]
+        }
+    };
+    
     await bot.sendMessage(MODERATOR_CHANNEL_ID,
         `🔔 *НОВАЯ ЗАЯВКА НА ПРИВЯЗКУ*\n\n` +
         `👤 Пользователь: @${username}\n` +
         `🆔 Telegram ID: \`${telegramId}\`\n` +
-        `🔗 UID с сайта: \`${uid}\`\n\n` +
-        `✅ Подтвердить: /approve_telegram ${uid} ${telegramId}\n` +
-        `❌ Отклонить: /reject_telegram ${uid}`,
-        { parse_mode: 'Markdown' }
+        `🔗 UID с сайта: \`${uid}\``,
+        { parse_mode: 'Markdown', ...keyboard }
     );
     
     await bot.sendMessage(chatId,
         `✅ *Заявка на привязку отправлена!*\n\n` +
-        `Модератор рассмотрит её в ближайшее время.\n` +
-        `После подтверждения вы получите уведомление.`,
-        { parse_mode: 'Markdown' }
-    );
-});
-
-// Команды для модератора (привязка)
-bot.onText(/\/approve_telegram (.+) (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const uid = match[1];
-    const telegramId = match[2];
-    
-    if (chatId.toString() !== MODERATOR_CHANNEL_ID) return;
-    
-    // Здесь админ вручную добавит telegramId в Firestore через админку
-    await bot.sendMessage(chatId,
-        `✅ *Привязка подтверждена!*\n\n` +
-        `UID: ${uid}\n` +
-        `Telegram ID: ${telegramId}\n\n` +
-        `❗ Добавьте этот Telegram ID в админке сайта.`,
-        { parse_mode: 'Markdown' }
-    );
-    
-    // Уведомляем пользователя
-    await bot.sendMessage(parseInt(telegramId),
-        `✅ *Ваш аккаунт привязан к сайту PRORANK!*\n\n` +
-        `Теперь вы будете получать уведомления о вызовах.`,
-        { parse_mode: 'Markdown' }
-    );
-});
-
-bot.onText(/\/reject_telegram (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    const uid = match[1];
-    
-    if (chatId.toString() !== MODERATOR_CHANNEL_ID) return;
-    
-    await bot.sendMessage(chatId,
-        `❌ *Привязка отклонена*\nUID: ${uid}`,
+        `Модератор рассмотрит её в ближайшее время.`,
         { parse_mode: 'Markdown' }
     );
 });
@@ -110,8 +80,7 @@ bot.onText(/\/start/, async (msg) => {
     };
     
     await bot.sendMessage(chatId, 
-        `🥊 *Добро пожаловать в PRORANK!*\n\n` +
-        `*Твой ID:* \`${userId}\``,
+        `🥊 *Добро пожаловать в PRORANK!*\n\n*Твой ID:* \`${userId}\``,
         { parse_mode: 'Markdown', ...keyboard }
     );
 });
@@ -143,11 +112,42 @@ bot.onText(/🏆 Подтвердить рекорд/, async (msg) => {
     await bot.sendMessage(chatId, `🏆 *Выбери тип достижения:*`, { parse_mode: 'Markdown', ...keyboard });
 });
 
+bot.onText(/⚔️ Мои вызовы/, async (msg) => {
+    await bot.sendMessage(msg.chat.id, `⚔️ *Мои вызовы*\n\nЗайдите на сайт в раздел "Мои вызовы".`, { parse_mode: 'Markdown' });
+});
+
+bot.onText(/❓ Поддержка/, async (msg) => {
+    await bot.sendMessage(msg.chat.id, `❓ *Поддержка*\n\nЧат: @prorank_support`, { parse_mode: 'Markdown' });
+});
+
+// ========== ОБРАБОТЧИКИ CALLBACK_QUERY ==========
 bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
     const userId = query.from.id;
     const data = query.data;
     
+    // Привязка Telegram
+    if (data.startsWith('approve_tg_')) {
+        const parts = data.split('_');
+        const uid = parts[2];
+        const telegramId = parts[3];
+        
+        await bot.sendMessage(chatId, 
+            `✅ *Привязка подтверждена!*\n\n` +
+            `UID: ${uid}\nTelegram ID: ${telegramId}\n\n` +
+            `❗ Добавьте этот Telegram ID в админке сайта.`,
+            { parse_mode: 'Markdown' }
+        );
+        await bot.answerCallbackQuery(query.id);
+    }
+    
+    if (data.startsWith('reject_tg_')) {
+        const uid = data.split('_')[2];
+        await bot.sendMessage(chatId, `❌ *Привязка отклонена*\nUID: ${uid}`, { parse_mode: 'Markdown' });
+        await bot.answerCallbackQuery(query.id);
+    }
+    
+    // Выбор типа рекорда
     if (data.startsWith('record_')) {
         const type = data.replace('record_', '');
         pendingVerifications.set(userId, { step: 'waiting_for_description', type });
@@ -158,19 +158,21 @@ bot.on('callback_query', async (query) => {
         await bot.answerCallbackQuery(query.id);
     }
     
-    if (data.startsWith('approve_')) {
+    // Подтверждение/отклонение рекордов
+    if (data.startsWith('approve_') && !data.startsWith('approve_tg_')) {
         const requestId = data.replace('approve_', '');
         await bot.sendMessage(chatId, `✅ *Заявка #${requestId} ОДОБРЕНА!*`, { parse_mode: 'Markdown' });
         await bot.answerCallbackQuery(query.id);
     }
     
-    if (data.startsWith('reject_')) {
+    if (data.startsWith('reject_') && !data.startsWith('reject_tg_')) {
         const requestId = data.replace('reject_', '');
         await bot.sendMessage(chatId, `❌ *Заявка #${requestId} ОТКЛОНЕНА*`, { parse_mode: 'Markdown' });
         await bot.answerCallbackQuery(query.id);
     }
 });
 
+// ========== ОБРАБОТКА ОПИСАНИЯ РЕКОРДА ==========
 bot.on('text', async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -189,6 +191,7 @@ bot.on('text', async (msg) => {
     }
 });
 
+// ========== ОБРАБОТКА ФОТО ==========
 bot.on('photo', async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -232,14 +235,6 @@ bot.on('photo', async (msg) => {
         console.error(err);
         await bot.sendMessage(chatId, `❌ Ошибка. Попробуй ещё раз.`);
     }
-});
-
-bot.onText(/⚔️ Мои вызовы/, async (msg) => {
-    await bot.sendMessage(msg.chat.id, `⚔️ *Мои вызовы*\n\nЗайдите на сайт в раздел "Мои вызовы".`, { parse_mode: 'Markdown' });
-});
-
-bot.onText(/❓ Поддержка/, async (msg) => {
-    await bot.sendMessage(msg.chat.id, `❓ *Поддержка*\n\nЧат: @prorank_support`, { parse_mode: 'Markdown' });
 });
 
 setInterval(() => console.log('💓 Бот жив'), 30000);
