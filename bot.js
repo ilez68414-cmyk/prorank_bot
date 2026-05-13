@@ -93,6 +93,40 @@ bot.onText(/📊 Мой профиль/, async (msg) => {
     );
 });
 
+// Автоматическая привязка аккаунта через /start verify_
+bot.onText(/\/start verify_(.+)/, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const uid = match[1];
+    const telegramId = msg.from.id;
+    const username = msg.from.username || msg.from.first_name;
+    
+    try {
+        const fighterRef = doc(db, "fighters", uid);
+        const fighterSnap = await getDoc(fighterRef);
+        
+        if (!fighterSnap.exists()) {
+            await bot.sendMessage(chatId, `❌ Профиль с ID ${uid} не найден. Проверьте ссылку.`);
+            return;
+        }
+        
+        await updateDoc(fighterRef, {
+            telegramId: String(telegramId),
+            telegramUsername: username
+        });
+        
+        await bot.sendMessage(chatId, 
+            `✅ *Аккаунт успешно привязан!*\n\n` +
+            `👤 Боец: ${fighterSnap.data().name}\n` +
+            `📢 Теперь вы будете получать уведомления о вызовах.`,
+            { parse_mode: 'Markdown' }
+        );
+        
+    } catch (err) {
+        console.error('Ошибка привязки:', err);
+        await bot.sendMessage(chatId, `❌ Ошибка при привязке. Попробуйте позже.`);
+    }
+});
+
 bot.onText(/🏆 Подтвердить рекорд/, async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
